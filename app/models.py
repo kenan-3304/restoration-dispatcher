@@ -23,7 +23,7 @@ class VapiWebhook(BaseModel):
 
 class TestDispatchRequest(BaseModel):
     call_id: str
-    customer_id: Optional[int] = None
+    customer_id: int  # required — no default
     caller_name: Optional[str] = None
     callback_number: Optional[str] = None
     property_address: Optional[str] = None

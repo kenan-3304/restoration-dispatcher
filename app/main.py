@@ -6,7 +6,7 @@ from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.db import init_db, get_recent_calls, get_customer_by_assistant_id, get_customer_by_id
-from app.models import StructuredData, VapiWebhook, TestDispatchRequest
+from app.models import StructuredData, TestDispatchRequest
 from app.pipeline import process_call
 
 logging.basicConfig(
@@ -42,13 +42,11 @@ async def webhook_vapi(request: Request, background_tasks: BackgroundTasks):
 
     message = body.get("message", {})
 
-    # Only process end-of-call reports
     msg_type = message.get("type", "")
     if msg_type != "end-of-call-report":
         logger.info("Ignoring message type: %s", msg_type)
         return {"status": "ignored", "reason": f"message type '{msg_type}' not handled"}
 
-    # Extract call ID and assistant ID
     call_data = message.get("call", {})
     call_id = call_data.get("id")
     if not call_id:
@@ -56,16 +54,14 @@ async def webhook_vapi(request: Request, background_tasks: BackgroundTasks):
 
     assistant_id = call_data.get("assistantId") or message.get("assistant", {}).get("id")
     if not assistant_id:
-        logger.warning("No assistantId in payload for call %s, cannot route to customer", call_id)
+        logger.warning("No assistantId in payload for call %s", call_id)
         return {"status": "ignored", "reason": "no assistantId — cannot route to customer"}
 
-    # Resolve customer from assistant ID
     customer = await get_customer_by_assistant_id(assistant_id)
     if not customer:
-        logger.warning("Unknown assistantId %s for call %s, ignoring", assistant_id, call_id)
+        logger.warning("Unknown assistantId %s for call %s", assistant_id, call_id)
         return {"status": "ignored", "reason": f"unknown assistant '{assistant_id}'"}
 
-    # Extract structured data
     analysis = message.get("analysis", {})
     structured = analysis.get("structuredData", {})
 
@@ -75,9 +71,7 @@ async def webhook_vapi(request: Request, background_tasks: BackgroundTasks):
         logger.error("Failed to parse structuredData for call %s: %s", call_id, e)
         return JSONResponse({"error": f"Invalid structuredData: {e}"}, status_code=400)
 
-    # Extract caller ID from call data (the number that called in)
     caller_id = call_data.get("phone_number") or call_data.get("customer", {}).get("number")
-
     raw_payload = json.dumps(body)
 
     background_tasks.add_task(process_call, call_id, data, raw_payload, customer, caller_id)
@@ -89,11 +83,10 @@ async def webhook_vapi(request: Request, background_tasks: BackgroundTasks):
 @app.post("/test/dispatch")
 async def test_dispatch(req: TestDispatchRequest, background_tasks: BackgroundTasks):
     """Test endpoint: submit structured data directly, runs same pipeline."""
-    customer_id = req.customer_id if req.customer_id is not None else 1
-    customer = await get_customer_by_id(customer_id)
+    customer = await get_customer_by_id(req.customer_id)
     if not customer:
         return JSONResponse(
-            {"error": f"Customer {customer_id} not found"},
+            {"error": f"Customer {req.customer_id} not found"},
             status_code=400,
         )
 
@@ -113,7 +106,6 @@ async def test_dispatch(req: TestDispatchRequest, background_tasks: BackgroundTa
     )
 
     raw_payload = json.dumps(req.model_dump())
-
     background_tasks.add_task(process_call, req.call_id, data, raw_payload, customer)
     logger.info("Test dispatch queued for call_id=%s (customer: %s)", req.call_id, customer["name"])
 
