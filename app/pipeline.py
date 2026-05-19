@@ -3,7 +3,6 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.config import settings
 from app.models import StructuredData
 from app.db import insert_call, update_call
 from app.address import validate_address
@@ -21,17 +20,23 @@ async def process_call(
     vapi_call_id: str,
     data: StructuredData,
     raw_payload: str,
+    customer: dict,
     caller_id: Optional[str] = None,
 ):
     """Main pipeline: insert, validate address, dispatch or confirm."""
     try:
         # 1. Insert row (idempotency check)
-        row_id, was_duplicate = await insert_call(vapi_call_id, data, raw_payload)
+        row_id, was_duplicate = await insert_call(
+            vapi_call_id, data, raw_payload, customer_id=customer["id"]
+        )
         if was_duplicate:
             logger.info("Duplicate call %s, skipping pipeline", vapi_call_id)
             return
 
-        logger.info("Processing call %s (row %s), outcome=%s", vapi_call_id, row_id, data.call_outcome)
+        logger.info(
+            "Processing call %s (row %s), customer=%s, outcome=%s",
+            vapi_call_id, row_id, customer["name"], data.call_outcome,
+        )
 
         # 2. Check call_outcome — only dispatch for emergency_dispatch
         if data.call_outcome in ("spam", "non_emergency", "referral"):
@@ -45,11 +50,15 @@ async def process_call(
                 address_validation_status="skipped",
                 error="No property address provided",
             )
-            # Still try to dispatch with what we have
-            await _dispatch_no_address(vapi_call_id, data, caller_id)
+            await _dispatch_no_address(vapi_call_id, data, customer, caller_id)
             return
 
-        tier, formatted_address, distance = await validate_address(data.property_address)
+        tier, formatted_address, distance = await validate_address(
+            data.property_address,
+            service_center_lat=customer["service_center_lat"],
+            service_center_lng=customer["service_center_lng"],
+            service_radius_mi=customer["service_radius_mi"],
+        )
 
         # 4. Update row with validation result
         await update_call(
@@ -61,14 +70,13 @@ async def process_call(
 
         # 5. Act based on tier
         if tier == "in_radius":
-            await _send_dispatch(vapi_call_id, data, distance=distance, borderline=False)
+            await _send_dispatch(vapi_call_id, data, customer, distance=distance, borderline=False)
         elif tier == "borderline":
-            await _send_dispatch(vapi_call_id, data, distance=distance, borderline=True)
+            await _send_dispatch(vapi_call_id, data, customer, distance=distance, borderline=True)
         elif tier in ("out_of_radius", "invalid"):
-            await _send_caller_confirmation(vapi_call_id, data, caller_id)
+            await _send_caller_confirmation(vapi_call_id, data, customer, caller_id)
         elif tier == "skipped":
-            # No Google API key — dispatch anyway
-            await _send_dispatch(vapi_call_id, data, distance=None, borderline=False)
+            await _send_dispatch(vapi_call_id, data, customer, distance=None, borderline=False)
 
     except Exception as e:
         logger.exception("Error processing call %s: %s", vapi_call_id, e)
@@ -81,15 +89,16 @@ async def process_call(
 async def _send_dispatch(
     vapi_call_id: str,
     data: StructuredData,
+    customer: dict,
     distance: Optional[float],
     borderline: bool,
 ):
     """Send dispatch SMS to on-call tech."""
     body = build_dispatch_sms(data, distance=distance, borderline=borderline)
-    to = settings.CUSTOMER_ON_CALL_PHONE
+    to = customer["on_call_phone"]
 
     if not to:
-        logger.error("No CUSTOMER_ON_CALL_PHONE configured, cannot dispatch")
+        logger.error("No on_call_phone for customer %s, cannot dispatch", customer["id"])
         await update_call(vapi_call_id, error="No on-call phone configured")
         return
 
@@ -111,6 +120,7 @@ async def _send_dispatch(
 async def _send_caller_confirmation(
     vapi_call_id: str,
     data: StructuredData,
+    customer: dict,
     caller_id: Optional[str] = None,
 ):
     """Send address confirmation SMS to the caller."""
@@ -120,7 +130,7 @@ async def _send_caller_confirmation(
         await update_call(vapi_call_id, error="No callback number for caller confirmation")
         return
 
-    body = build_caller_confirmation_sms(data.caller_name)
+    body = build_caller_confirmation_sms(data.caller_name, customer_name=customer["name"])
 
     try:
         sid = await send_sms(callback, body)
@@ -140,7 +150,8 @@ async def _send_caller_confirmation(
 async def _dispatch_no_address(
     vapi_call_id: str,
     data: StructuredData,
+    customer: dict,
     caller_id: Optional[str] = None,
 ):
     """Dispatch even without an address — tech will need to call back."""
-    await _send_dispatch(vapi_call_id, data, distance=None, borderline=False)
+    await _send_dispatch(vapi_call_id, data, customer, distance=None, borderline=False)

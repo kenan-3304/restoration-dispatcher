@@ -11,10 +11,22 @@ from app.models import StructuredData
 logger = logging.getLogger(__name__)
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS customers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    on_call_phone TEXT NOT NULL,
+    owner_phone TEXT,
+    service_center_lat REAL NOT NULL,
+    service_center_lng REAL NOT NULL,
+    service_radius_mi INTEGER NOT NULL DEFAULT 30,
+    vapi_assistant_id TEXT UNIQUE
+);
+
 CREATE TABLE IF NOT EXISTS calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     vapi_call_id TEXT UNIQUE NOT NULL,
     received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    customer_id INTEGER,
     caller_name TEXT,
     callback_number TEXT,
     property_address TEXT,
@@ -49,6 +61,32 @@ CREATE INDEX IF NOT EXISTS idx_calls_received_at ON calls(received_at);
 """
 
 
+async def seed_customer():
+    """If customers table is empty, insert one row from env vars."""
+    async with aiosqlite.connect(settings.DATABASE_PATH) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM customers")
+        (count,) = await cursor.fetchone()
+        if count == 0 and settings.CUSTOMER_NAME:
+            await db.execute(
+                """INSERT INTO customers
+                   (name, on_call_phone, owner_phone,
+                    service_center_lat, service_center_lng,
+                    service_radius_mi, vapi_assistant_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    settings.CUSTOMER_NAME,
+                    settings.CUSTOMER_ON_CALL_PHONE,
+                    settings.CUSTOMER_OWNER_PHONE or None,
+                    settings.CUSTOMER_SERVICE_CENTER_LAT,
+                    settings.CUSTOMER_SERVICE_CENTER_LNG,
+                    settings.CUSTOMER_SERVICE_RADIUS_MI,
+                    settings.CUSTOMER_VAPI_ASSISTANT_ID or None,
+                ),
+            )
+            await db.commit()
+            logger.info("Seeded customer #1 from env vars: %s", settings.CUSTOMER_NAME)
+
+
 async def init_db():
     db_dir = os.path.dirname(settings.DATABASE_PATH)
     if db_dir:
@@ -56,6 +94,7 @@ async def init_db():
     async with aiosqlite.connect(settings.DATABASE_PATH) as db:
         await db.executescript(SCHEMA)
         await db.commit()
+    await seed_customer()
     logger.info("Database initialized at %s", settings.DATABASE_PATH)
 
 
@@ -63,10 +102,35 @@ async def _get_db() -> aiosqlite.Connection:
     return await aiosqlite.connect(settings.DATABASE_PATH)
 
 
+async def get_customer_by_assistant_id(assistant_id: str) -> Optional[dict]:
+    """Look up a customer by their vapi_assistant_id."""
+    async with aiosqlite.connect(settings.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM customers WHERE vapi_assistant_id = ?",
+            (assistant_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def get_customer_by_id(customer_id: int) -> Optional[dict]:
+    """Look up a customer by primary key."""
+    async with aiosqlite.connect(settings.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM customers WHERE id = ?",
+            (customer_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
 async def insert_call(
     vapi_call_id: str,
     data: StructuredData,
     raw_payload: str,
+    customer_id: Optional[int] = None,
 ) -> tuple[Optional[int], bool]:
     """Insert a call row. Returns (row_id, was_duplicate).
     If duplicate, returns (None, True)."""
@@ -74,13 +138,14 @@ async def insert_call(
         async with aiosqlite.connect(settings.DATABASE_PATH) as db:
             cursor = await db.execute(
                 """INSERT INTO calls (
-                    vapi_call_id, caller_name, callback_number, property_address,
-                    loss_type, is_active, source_of_loss, call_outcome,
-                    call_summary, water_category, rooms_affected,
+                    vapi_call_id, customer_id, caller_name, callback_number,
+                    property_address, loss_type, is_active, source_of_loss,
+                    call_outcome, call_summary, water_category, rooms_affected,
                     insurance_carrier, life_safety_concern, raw_payload
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     vapi_call_id,
+                    customer_id,
                     data.caller_name,
                     data.callback_number,
                     data.property_address,

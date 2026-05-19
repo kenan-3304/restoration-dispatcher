@@ -59,7 +59,12 @@ def classify_address(
         return "out_of_radius", {"distance": distance}
 
 
-async def validate_address(address: str) -> tuple[str, Optional[str], Optional[float]]:
+async def validate_address(
+    address: str,
+    service_center_lat: float,
+    service_center_lng: float,
+    service_radius_mi: int,
+) -> tuple[str, Optional[str], Optional[float]]:
     """
     Validate an address via Google Address Validation API.
     Returns (tier, formatted_address, distance_mi).
@@ -79,9 +84,9 @@ async def validate_address(address: str) -> tuple[str, Optional[str], Optional[f
 
     tier, details = classify_address(
         google_response,
-        settings.CUSTOMER_SERVICE_CENTER_LAT,
-        settings.CUSTOMER_SERVICE_CENTER_LNG,
-        settings.CUSTOMER_SERVICE_RADIUS_MI,
+        service_center_lat,
+        service_center_lng,
+        service_radius_mi,
     )
 
     formatted_address = (

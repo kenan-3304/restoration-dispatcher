@@ -86,10 +86,10 @@ def build_dispatch_sms(data: StructuredData, distance: Optional[float] = None, b
     return "\n".join(lines)
 
 
-def build_caller_confirmation_sms(caller_name: Optional[str]) -> str:
+def build_caller_confirmation_sms(caller_name: Optional[str], customer_name: str = "") -> str:
     """Build the address confirmation SMS for the caller."""
     name = caller_name or "there"
-    customer = settings.CUSTOMER_NAME or "our"
+    customer = customer_name or "our"
     return (
         f"Hi {name}, this is {customer}'s dispatch line following up on your call. "
         f"We want to make sure we got your address right \u2014 can you reply to this "
