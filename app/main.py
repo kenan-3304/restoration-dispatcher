@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Restoration Dispatcher", lifespan=lifespan)
 
 
-@app.get("/healthz", methods=["GET", "HEAD"])
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz():
     return {"status": "ok"}
 
