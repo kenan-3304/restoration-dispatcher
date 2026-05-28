@@ -44,6 +44,13 @@ def resolve_callback_number(data: StructuredData, caller_id: Optional[str] = Non
     return _sanitize_phone(caller_id)
 
 
+_WATER_TYPE_LABEL = {
+    "clean": "Clean water (Cat 1)",
+    "dirty": "Dirty/gray water (Cat 2+)",
+    "unknown": "Water type unknown",
+}
+
+
 def build_dispatch_sms(data: StructuredData, distance: Optional[float] = None, borderline: bool = False) -> str:
     """Build the dispatch SMS body for the on-call tech."""
     emoji = LOSS_TYPE_EMOJI.get((data.loss_type or "").lower(), DEFAULT_EMOJI)
@@ -58,25 +65,30 @@ def build_dispatch_sms(data: StructuredData, distance: Optional[float] = None, b
 
     lines.append(f"\U0001f6a8 {emoji} {loss_upper} \u2014 {urgency}")
 
-    address_line = data.property_address or "NO ADDRESS"
+    address_line = data.address_full or "NO ADDRESS"
     if distance is not None and not borderline:
         address_line += f" ({distance:.0f} mi)"
+    if data.address_confirmed is True:
+        address_line += " \u2713"
+    elif data.address_confirmed is False:
+        address_line += " (not confirmed)"
     lines.append(address_line)
 
     active_str = "ACTIVE" if data.is_active else "Not active"
-    source_str = data.source_of_loss or "unknown source"
+    source_str = data.source_detail or "unknown source"
     lines.append(f"{active_str} \u2014 {source_str}")
 
-    rooms_line = f"Rooms: {data.rooms_affected}" if data.rooms_affected else ""
-    if data.water_category:
-        rooms_line += f" | Cat {data.water_category}" if rooms_line else f"Cat {data.water_category}"
-    if rooms_line:
-        lines.append(rooms_line)
+    water_label = _WATER_TYPE_LABEL.get(data.water_clean_or_dirty or "")
+    if water_label:
+        lines.append(water_label)
 
     if data.life_safety_concern:
         lines.append("\u26a0\ufe0f LIFE SAFETY CONCERN")
 
     lines.append(f"Insurance: {data.insurance_carrier or 'None provided'}")
+
+    if data.access_notes:
+        lines.append(f"Access: {data.access_notes}")
 
     callback = _sanitize_phone(data.callback_number) or "no number"
     lines.append(f"Caller: {data.caller_name or 'Unknown'}, {callback}")
@@ -95,6 +107,33 @@ def build_caller_confirmation_sms(caller_name: Optional[str], customer_name: str
         f"We want to make sure we got your address right \u2014 can you reply to this "
         f"message with the full property address including city and ZIP? "
         f"We'll get a technician out as soon as we confirm."
+    )
+
+
+def build_address_confirmed_sms(caller_name: Optional[str], customer_name: str, address: str) -> str:
+    """Sent to caller after their replied address validates and dispatch goes out."""
+    name = caller_name or "there"
+    return (
+        f"Got it, {name}! {customer_name} is sending a technician to {address}. "
+        f"They'll be in touch shortly."
+    )
+
+
+def build_outside_radius_sms(caller_name: Optional[str], customer_name: str) -> str:
+    """Sent to caller when their replied address is still outside the service area."""
+    name = caller_name or "there"
+    return (
+        f"Hi {name}, unfortunately that address is outside {customer_name}'s service area. "
+        f"We recommend searching for a local restoration company in your area."
+    )
+
+
+def build_address_unverifiable_sms(caller_name: Optional[str], customer_name: str) -> str:
+    """Sent to caller when their replied address cannot be validated."""
+    name = caller_name or "there"
+    return (
+        f"Hi {name}, we weren't able to verify that address. "
+        f"Please call {customer_name} directly so we can get you the right help."
     )
 
 

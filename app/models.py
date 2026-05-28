@@ -3,18 +3,20 @@ from typing import Optional, Literal
 
 
 class StructuredData(BaseModel):
+    call_outcome: Literal["emergency_dispatch", "non_emergency_callback"]
+    life_safety_concern: Optional[bool] = None
     caller_name: Optional[str] = None
     callback_number: Optional[str] = None
-    property_address: Optional[str] = None
-    loss_type: Optional[str] = None
+    address_full: Optional[str] = None
+    address_confirmed: Optional[bool] = None
+    loss_type: Optional[Literal["water", "fire", "smoke", "mold", "other"]] = None
     is_active: Optional[bool] = None
-    source_of_loss: Optional[str] = None
-    call_outcome: Literal["emergency_dispatch", "non_emergency", "referral", "spam"]
-    call_summary: Optional[str] = None
-    water_category: Optional[str] = None
-    rooms_affected: Optional[str] = None
+    source_detail: Optional[str] = None
+    water_clean_or_dirty: Optional[Literal["clean", "dirty", "unknown", "not_applicable"]] = None
+    access_notes: Optional[str] = None
     insurance_carrier: Optional[str] = None
-    life_safety_concern: Optional[bool] = None
+    callback_reason: Optional[str] = None
+    call_summary: Optional[str] = None
 
 
 class VapiWebhook(BaseModel):
@@ -23,16 +25,18 @@ class VapiWebhook(BaseModel):
 
 class TestDispatchRequest(BaseModel):
     call_id: str
-    customer_id: int  # required — no default
+    customer_id: int
+    call_outcome: Literal["emergency_dispatch", "non_emergency_callback"] = "emergency_dispatch"
+    life_safety_concern: Optional[bool] = None
     caller_name: Optional[str] = None
     callback_number: Optional[str] = None
-    property_address: Optional[str] = None
+    address_full: Optional[str] = None
+    address_confirmed: Optional[bool] = None
     loss_type: Optional[str] = None
     is_active: Optional[bool] = None
-    source_of_loss: Optional[str] = None
-    call_outcome: Literal["emergency_dispatch", "non_emergency", "referral", "spam"] = "emergency_dispatch"
-    call_summary: Optional[str] = None
-    water_category: Optional[str] = None
-    rooms_affected: Optional[str] = None
+    source_detail: Optional[str] = None
+    water_clean_or_dirty: Optional[Literal["clean", "dirty", "unknown", "not_applicable"]] = None
+    access_notes: Optional[str] = None
     insurance_carrier: Optional[str] = None
-    life_safety_concern: Optional[bool] = None
+    callback_reason: Optional[str] = None
+    call_summary: Optional[str] = None

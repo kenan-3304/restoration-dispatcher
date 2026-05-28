@@ -1,6 +1,7 @@
 import aiosqlite
 import logging
 import os
+import re
 from typing import Optional
 
 from app.config import settings
@@ -17,7 +18,9 @@ CREATE TABLE IF NOT EXISTS customers (
     service_center_lat REAL NOT NULL,
     service_center_lng REAL NOT NULL,
     service_radius_mi INTEGER NOT NULL DEFAULT 30,
-    vapi_assistant_id TEXT UNIQUE
+    vapi_assistant_id TEXT UNIQUE,
+    crm_type TEXT,
+    crm_config TEXT
 );
 
 CREATE TABLE IF NOT EXISTS calls (
@@ -27,16 +30,18 @@ CREATE TABLE IF NOT EXISTS calls (
     received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     caller_name TEXT,
     callback_number TEXT,
-    property_address TEXT,
+    address_full TEXT,
+    address_confirmed BOOLEAN,
     loss_type TEXT,
     is_active BOOLEAN,
-    source_of_loss TEXT,
+    source_detail TEXT,
+    water_clean_or_dirty TEXT,
+    access_notes TEXT,
     call_outcome TEXT,
     call_summary TEXT,
-    water_category TEXT,
-    rooms_affected TEXT,
     insurance_carrier TEXT,
     life_safety_concern BOOLEAN,
+    callback_reason TEXT,
     raw_payload TEXT,
 
     address_validation_status TEXT,
@@ -50,13 +55,32 @@ CREATE TABLE IF NOT EXISTS calls (
     caller_confirmation_sent BOOLEAN DEFAULT 0,
     caller_confirmation_sent_at TIMESTAMP,
     caller_confirmation_sid TEXT,
+    pending_address_confirmation BOOLEAN DEFAULT 0,
 
+    crm_job_id TEXT,
     error TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_calls_vapi_call_id ON calls(vapi_call_id);
 CREATE INDEX IF NOT EXISTS idx_calls_received_at ON calls(received_at);
 """
+
+# All schema migrations — safe to retry, errors are silently ignored (column already exists / already renamed)
+_MIGRATIONS = [
+    # CRM columns
+    "ALTER TABLE customers ADD COLUMN crm_type TEXT",
+    "ALTER TABLE customers ADD COLUMN crm_config TEXT",
+    "ALTER TABLE calls ADD COLUMN crm_job_id TEXT",
+    "ALTER TABLE calls ADD COLUMN pending_address_confirmation BOOLEAN DEFAULT 0",
+    # Field renames (property_address→address_full, source_of_loss→source_detail, water_category→water_clean_or_dirty)
+    "ALTER TABLE calls RENAME COLUMN property_address TO address_full",
+    "ALTER TABLE calls RENAME COLUMN source_of_loss TO source_detail",
+    "ALTER TABLE calls RENAME COLUMN water_category TO water_clean_or_dirty",
+    # New fields
+    "ALTER TABLE calls ADD COLUMN address_confirmed BOOLEAN",
+    "ALTER TABLE calls ADD COLUMN access_notes TEXT",
+    "ALTER TABLE calls ADD COLUMN callback_reason TEXT",
+]
 
 
 async def init_db():
@@ -65,6 +89,11 @@ async def init_db():
         os.makedirs(db_dir, exist_ok=True)
     async with aiosqlite.connect(settings.DATABASE_PATH) as db:
         await db.executescript(SCHEMA)
+        for stmt in _MIGRATIONS:
+            try:
+                await db.execute(stmt)
+            except Exception:
+                pass  # column already exists
         await db.commit()
     logger.info("Database initialized at %s", settings.DATABASE_PATH)
 
@@ -104,25 +133,28 @@ async def insert_call(
             cursor = await db.execute(
                 """INSERT INTO calls (
                     vapi_call_id, customer_id, caller_name, callback_number,
-                    property_address, loss_type, is_active, source_of_loss,
-                    call_outcome, call_summary, water_category, rooms_affected,
-                    insurance_carrier, life_safety_concern, raw_payload
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    address_full, address_confirmed, loss_type, is_active,
+                    source_detail, water_clean_or_dirty, access_notes,
+                    call_outcome, call_summary, insurance_carrier,
+                    life_safety_concern, callback_reason, raw_payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     vapi_call_id,
                     customer_id,
                     data.caller_name,
                     data.callback_number,
-                    data.property_address,
+                    data.address_full,
+                    data.address_confirmed,
                     data.loss_type,
                     data.is_active,
-                    data.source_of_loss,
+                    data.source_detail,
+                    data.water_clean_or_dirty,
+                    data.access_notes,
                     data.call_outcome,
                     data.call_summary,
-                    data.water_category,
-                    data.rooms_affected,
                     data.insurance_carrier,
                     data.life_safety_concern,
+                    data.callback_reason,
                     raw_payload,
                 ),
             )
@@ -146,6 +178,33 @@ async def update_call(vapi_call_id: str, **kwargs):
             values,
         )
         await db.commit()
+
+
+async def get_pending_call_by_phone(from_phone: str) -> Optional[dict]:
+    """Find the most recent call awaiting address confirmation from this phone number.
+
+    Matches on the last 10 digits so format differences (+1 prefix, spaces, etc.) don't matter.
+    """
+    from_digits = re.sub(r"\D", "", from_phone)
+    if len(from_digits) < 10:
+        return None
+    from_tail = from_digits[-10:]
+
+    async with aiosqlite.connect(settings.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT * FROM calls
+               WHERE pending_address_confirmation = 1 AND dispatch_sent = 0
+               ORDER BY received_at DESC LIMIT 50"""
+        )
+        rows = await cursor.fetchall()
+
+    for row in rows:
+        stored = row["callback_number"] or ""
+        stored_digits = re.sub(r"\D", "", stored)
+        if stored_digits and stored_digits[-10:] == from_tail:
+            return dict(row)
+    return None
 
 
 async def get_recent_calls(limit: int = 20) -> list[dict]:

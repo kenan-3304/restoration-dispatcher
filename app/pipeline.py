@@ -6,9 +6,13 @@ from typing import Optional
 from app.models import StructuredData
 from app.db import insert_call, update_call
 from app.address import validate_address
+from app.crm import push_to_crm
 from app.dispatch import (
     build_dispatch_sms,
     build_caller_confirmation_sms,
+    build_address_confirmed_sms,
+    build_outside_radius_sms,
+    build_address_unverifiable_sms,
     resolve_callback_number,
     send_sms,
 )
@@ -39,12 +43,12 @@ async def process_call(
         )
 
         # 2. Check call_outcome — only dispatch for emergency_dispatch
-        if data.call_outcome in ("spam", "non_emergency", "referral"):
-            logger.info("Call %s outcome is %s, no dispatch needed", vapi_call_id, data.call_outcome)
+        if data.call_outcome == "non_emergency_callback":
+            logger.info("Call %s is non-emergency callback, no dispatch needed", vapi_call_id)
             return
 
         # 3. Validate property address
-        if not data.property_address:
+        if not data.address_full:
             await update_call(
                 vapi_call_id,
                 address_validation_status="skipped",
@@ -54,7 +58,7 @@ async def process_call(
             return
 
         tier, formatted_address, distance = await validate_address(
-            data.property_address,
+            data.address_full,
             service_center_lat=customer["service_center_lat"],
             service_center_lng=customer["service_center_lng"],
             service_radius_mi=customer["service_radius_mi"],
@@ -71,12 +75,15 @@ async def process_call(
         # 5. Act based on tier
         if tier == "in_radius":
             await _send_dispatch(vapi_call_id, data, customer, distance=distance, borderline=False)
+            await _push_crm(vapi_call_id, data, customer)
         elif tier == "borderline":
             await _send_dispatch(vapi_call_id, data, customer, distance=distance, borderline=True)
+            await _push_crm(vapi_call_id, data, customer)
         elif tier in ("out_of_radius", "invalid"):
             await _send_caller_confirmation(vapi_call_id, data, customer, caller_id)
         elif tier == "skipped":
             await _send_dispatch(vapi_call_id, data, customer, distance=None, borderline=False)
+            await _push_crm(vapi_call_id, data, customer)
 
     except Exception as e:
         logger.exception("Error processing call %s: %s", vapi_call_id, e)
@@ -140,6 +147,7 @@ async def _send_caller_confirmation(
             caller_confirmation_sent=True,
             caller_confirmation_sent_at=now,
             caller_confirmation_sid=sid,
+            pending_address_confirmation=True,
         )
         logger.info("Caller confirmation SMS sent for call %s to %s, SID=%s", vapi_call_id, callback, sid)
     except Exception as e:
@@ -155,3 +163,85 @@ async def _dispatch_no_address(
 ):
     """Dispatch even without an address — tech will need to call back."""
     await _send_dispatch(vapi_call_id, data, customer, distance=None, borderline=False)
+    await _push_crm(vapi_call_id, data, customer)
+
+
+async def _push_crm(vapi_call_id: str, data: StructuredData, customer: dict):
+    """Push call to CRM if the customer has one configured. Errors are logged, not raised."""
+    if not customer.get("crm_type"):
+        return
+    call_dict = {"vapi_call_id": vapi_call_id, **data.model_dump()}
+    crm_job_id = await push_to_crm(
+        customer["crm_type"],
+        customer.get("crm_config"),
+        call_dict,
+        customer,
+    )
+    if crm_job_id:
+        await update_call(vapi_call_id, crm_job_id=crm_job_id)
+        logger.info("CRM job %s created for call %s", crm_job_id, vapi_call_id)
+
+
+async def process_address_reply(call: dict, customer: dict, address: str):
+    """Process a caller's SMS reply containing their corrected address.
+
+    Re-validates the address and dispatches if it's in range, otherwise
+    sends the caller a clear closing message. Either way the pending flag is cleared.
+    """
+    vapi_call_id = call["vapi_call_id"]
+    callback = call.get("callback_number")
+    caller_name = call.get("caller_name")
+
+    # Close the pending window immediately so duplicate replies don't double-dispatch
+    await update_call(vapi_call_id, pending_address_confirmation=False, address_full=address)
+
+    try:
+        tier, formatted_address, distance = await validate_address(
+            address,
+            service_center_lat=customer["service_center_lat"],
+            service_center_lng=customer["service_center_lng"],
+            service_radius_mi=customer["service_radius_mi"],
+        )
+
+        await update_call(
+            vapi_call_id,
+            address_validation_status=tier,
+            validated_address=formatted_address,
+            distance_from_service_center_mi=distance,
+        )
+
+        if tier in ("in_radius", "borderline"):
+            data = StructuredData(
+                caller_name=caller_name,
+                callback_number=callback,
+                address_full=formatted_address or address,
+                address_confirmed=True,
+                loss_type=call.get("loss_type"),
+                is_active=call.get("is_active"),
+                source_detail=call.get("source_detail"),
+                call_outcome=call.get("call_outcome", "emergency_dispatch"),
+                call_summary=call.get("call_summary"),
+                water_clean_or_dirty=call.get("water_clean_or_dirty"),
+                access_notes=call.get("access_notes"),
+                insurance_carrier=call.get("insurance_carrier"),
+                life_safety_concern=call.get("life_safety_concern"),
+            )
+            await _send_dispatch(vapi_call_id, data, customer, distance=distance, borderline=(tier == "borderline"))
+            await _push_crm(vapi_call_id, data, customer)
+            if callback:
+                msg = build_address_confirmed_sms(caller_name, customer["name"], formatted_address or address)
+                await send_sms(callback, msg)
+
+        elif tier == "out_of_radius":
+            logger.info("Call %s still out of radius after address reply, no dispatch", vapi_call_id)
+            if callback:
+                await send_sms(callback, build_outside_radius_sms(caller_name, customer["name"]))
+
+        else:  # invalid
+            logger.info("Call %s address still unverifiable after reply, no dispatch", vapi_call_id)
+            if callback:
+                await send_sms(callback, build_address_unverifiable_sms(caller_name, customer["name"]))
+
+    except Exception as e:
+        logger.exception("Error processing address reply for call %s: %s", vapi_call_id, e)
+        await update_call(vapi_call_id, error=f"Address reply processing failed: {e}")

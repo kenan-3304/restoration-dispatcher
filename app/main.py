@@ -3,11 +3,11 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
-from app.db import init_db, get_recent_calls, get_customer_by_assistant_id, get_customer_by_id
+from app.db import init_db, get_recent_calls, get_customer_by_assistant_id, get_customer_by_id, get_pending_call_by_phone
 from app.models import StructuredData, TestDispatchRequest
-from app.pipeline import process_call
+from app.pipeline import process_call, process_address_reply
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,18 +91,20 @@ async def test_dispatch(req: TestDispatchRequest, background_tasks: BackgroundTa
         )
 
     data = StructuredData(
+        call_outcome=req.call_outcome,
+        life_safety_concern=req.life_safety_concern,
         caller_name=req.caller_name,
         callback_number=req.callback_number,
-        property_address=req.property_address,
+        address_full=req.address_full,
+        address_confirmed=req.address_confirmed,
         loss_type=req.loss_type,
         is_active=req.is_active,
-        source_of_loss=req.source_of_loss,
-        call_outcome=req.call_outcome,
-        call_summary=req.call_summary,
-        water_category=req.water_category,
-        rooms_affected=req.rooms_affected,
+        source_detail=req.source_detail,
+        water_clean_or_dirty=req.water_clean_or_dirty,
+        access_notes=req.access_notes,
         insurance_carrier=req.insurance_carrier,
-        life_safety_concern=req.life_safety_concern,
+        callback_reason=req.callback_reason,
+        call_summary=req.call_summary,
     )
 
     raw_payload = json.dumps(req.model_dump())
@@ -110,6 +112,39 @@ async def test_dispatch(req: TestDispatchRequest, background_tasks: BackgroundTa
     logger.info("Test dispatch queued for call_id=%s (customer: %s)", req.call_id, customer["name"])
 
     return {"status": "ok", "call_id": req.call_id, "customer": customer["name"]}
+
+
+@app.post("/webhook/twilio/inbound")
+async def twilio_inbound(request: Request, background_tasks: BackgroundTasks):
+    """Receive inbound SMS from Twilio. Handles caller address replies."""
+    form = await request.form()
+    from_number = str(form.get("From", "")).strip()
+    body = str(form.get("Body", "")).strip()
+
+    logger.info("Inbound SMS from %s: %.80s", from_number, body)
+
+    if not from_number or not body:
+        return _twiml("")
+
+    call = await get_pending_call_by_phone(from_number)
+    if not call:
+        logger.info("No pending confirmation found for %s, ignoring", from_number)
+        return _twiml("")
+
+    customer = await get_customer_by_id(call["customer_id"])
+    if not customer:
+        return _twiml("")
+
+    background_tasks.add_task(process_address_reply, call, customer, body)
+    logger.info("Queued address reply for call %s from %s", call["vapi_call_id"], from_number)
+
+    return _twiml("Thanks — we’re verifying your address now and will follow up shortly.")
+
+
+def _twiml(message: str) -> Response:
+    inner = f"<Message>{message}</Message>" if message else ""
+    xml = f'<?xml version="1.0" encoding="UTF-8"?><Response>{inner}</Response>'
+    return Response(content=xml, media_type="application/xml")
 
 
 @app.get("/calls/recent")
