@@ -59,12 +59,20 @@ def post(path: str, body: dict) -> dict:
 
 
 def _clear_test_rows():
-    import sqlite3
-    db_path = os.getenv("DATABASE_PATH", "./data/dispatcher.db")
-    conn = sqlite3.connect(db_path)
-    n = conn.execute("DELETE FROM calls WHERE vapi_call_id LIKE 't-%'").rowcount
-    conn.commit()
-    conn.close()
+    import asyncio
+    import asyncpg
+
+    async def _clear():
+        db_url = os.getenv("DATABASE_URL")
+        if not db_url:
+            print("  (DATABASE_URL not set — skipping test row cleanup)")
+            return 0
+        conn = await asyncpg.connect(db_url)
+        result = await conn.execute("DELETE FROM calls WHERE vapi_call_id LIKE 't-%'")
+        await conn.close()
+        return int(result.split()[-1])
+
+    n = asyncio.run(_clear())
     if n:
         print(f"  (cleared {n} leftover test rows from previous run)\n")
 

@@ -2,11 +2,18 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from app.db import init_db, get_recent_calls, get_customer_by_assistant_id, get_customer_by_id, get_pending_call_by_phone
-from app.models import StructuredData, TestDispatchRequest
+from app.config import settings
+from app.db import (
+    init_db, close_db,
+    get_recent_calls,
+    get_customer_by_assistant_id, get_customer_by_id,
+    get_pending_call_by_phone,
+    create_customer, list_customers,
+)
+from app.models import AdminCreateCustomerRequest, StructuredData, TestDispatchRequest
 from app.pipeline import process_call, process_address_reply
 
 logging.basicConfig(
@@ -16,11 +23,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _require_admin(x_admin_key: str = Header(..., alias="X-Admin-Key")):
+    if not settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=503, detail="ADMIN_API_KEY not configured on server")
+    if x_admin_key != settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid admin key")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    if not settings.ADMIN_API_KEY:
+        logger.warning("ADMIN_API_KEY is not set — admin endpoints will return 503")
     logger.info("Restoration dispatcher started")
     yield
+    await close_db()
     logger.info("Restoration dispatcher shutting down")
 
 
@@ -139,6 +156,33 @@ async def twilio_inbound(request: Request, background_tasks: BackgroundTasks):
     logger.info("Queued address reply for call %s from %s", call["vapi_call_id"], from_number)
 
     return _twiml("Thanks — we’re verifying your address now and will follow up shortly.")
+
+
+@app.post("/admin/customers")
+async def admin_create_customer(req: AdminCreateCustomerRequest, _=Depends(_require_admin)):
+    try:
+        row = await create_customer(
+            name=req.name,
+            on_call_phone=req.on_call_phone,
+            owner_phone=req.owner_phone,
+            lat=req.lat,
+            lng=req.lng,
+            radius=req.radius,
+            assistant_id=req.assistant_id,
+            crm_type=req.crm_type,
+            crm_config=req.crm_config,
+        )
+        logger.info("Admin: created customer id=%s name=%s", row["id"], row["name"])
+        return row
+    except Exception as e:
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            raise HTTPException(status_code=409, detail=f"A customer with that assistant_id already exists")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/customers")
+async def admin_list_customers(_=Depends(_require_admin)):
+    return {"customers": await list_customers()}
 
 
 def _twiml(message: str) -> Response:

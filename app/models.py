@@ -19,6 +19,18 @@ class StructuredData(BaseModel):
     call_summary: Optional[str] = None
 
 
+class AdminCreateCustomerRequest(BaseModel):
+    name: str
+    on_call_phone: str
+    owner_phone: Optional[str] = None
+    lat: float
+    lng: float
+    radius: int = 30
+    assistant_id: str
+    crm_type: Optional[str] = None
+    crm_config: Optional[str] = None
+
+
 class VapiWebhook(BaseModel):
     message: dict
 

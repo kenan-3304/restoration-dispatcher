@@ -20,7 +20,8 @@ class Settings:
 
     OPENAI_API_KEY: str = _str("OPENAI_API_KEY")
 
-    DATABASE_PATH: str = _str("DATABASE_PATH", "./data/dispatcher.db")
+    DATABASE_URL: str = _str("DATABASE_URL")
+    ADMIN_API_KEY: str = _str("ADMIN_API_KEY")
 
 
 settings = Settings()
