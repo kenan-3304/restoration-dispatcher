@@ -111,7 +111,7 @@ async def _send_dispatch(
 
     try:
         sid = await send_sms(to, body)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
         await update_call(
             vapi_call_id,
             dispatch_sent=True,
@@ -141,7 +141,7 @@ async def _send_caller_confirmation(
 
     try:
         sid = await send_sms(callback, body)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
         await update_call(
             vapi_call_id,
             caller_confirmation_sent=True,

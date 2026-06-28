@@ -30,7 +30,7 @@ _SCHEMA_STMTS = [
         id SERIAL PRIMARY KEY,
         vapi_call_id TEXT UNIQUE NOT NULL,
         customer_id INTEGER,
-        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        received_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         caller_name TEXT,
         callback_number TEXT,
         address_full TEXT,
@@ -50,10 +50,10 @@ _SCHEMA_STMTS = [
         validated_address TEXT,
         distance_from_service_center_mi REAL,
         dispatch_sent BOOLEAN DEFAULT FALSE,
-        dispatch_sent_at TIMESTAMP,
+        dispatch_sent_at TIMESTAMPTZ,
         dispatch_sid TEXT,
         caller_confirmation_sent BOOLEAN DEFAULT FALSE,
-        caller_confirmation_sent_at TIMESTAMP,
+        caller_confirmation_sent_at TIMESTAMPTZ,
         caller_confirmation_sid TEXT,
         pending_address_confirmation BOOLEAN DEFAULT FALSE,
         crm_job_id TEXT,
@@ -65,6 +65,9 @@ _SCHEMA_STMTS = [
 ]
 
 _MIGRATIONS = [
+    "ALTER TABLE calls ALTER COLUMN received_at TYPE TIMESTAMPTZ USING received_at AT TIME ZONE 'UTC'",
+    "ALTER TABLE calls ALTER COLUMN dispatch_sent_at TYPE TIMESTAMPTZ USING dispatch_sent_at AT TIME ZONE 'UTC'",
+    "ALTER TABLE calls ALTER COLUMN caller_confirmation_sent_at TYPE TIMESTAMPTZ USING caller_confirmation_sent_at AT TIME ZONE 'UTC'",
     "ALTER TABLE customers ADD COLUMN IF NOT EXISTS crm_type TEXT",
     "ALTER TABLE customers ADD COLUMN IF NOT EXISTS crm_config TEXT",
     "ALTER TABLE calls ADD COLUMN IF NOT EXISTS crm_job_id TEXT",

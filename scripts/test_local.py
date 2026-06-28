@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE = "http://localhost:8000"
-CUSTOMER_ID = 2  # Kenan / Ashburn VA test customer
+CUSTOMER_ID = 1  # Kenan / Ashburn VA test customer
 PHONE = os.getenv("TEST_PHONE", "+17037760484")  # override with TEST_PHONE=+1... python scripts/test_local.py
 
 PASS = "\033[92m✓\033[0m"
