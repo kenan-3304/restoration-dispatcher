@@ -1,5 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, Literal
+
+_IS_ACTIVE_VALUES = {"yes", "no", "unknown"}
 
 
 class StructuredData(BaseModel):
@@ -13,6 +15,23 @@ class StructuredData(BaseModel):
     is_active: Optional[Literal["yes", "no", "unknown"]] = None
     source_detail: Optional[str] = None
     alternate_callback_number: Optional[str] = None
+
+    @field_validator("is_active", mode="before")
+    @classmethod
+    def _coerce_is_active(cls, v):
+        # Optional enum fields can arrive as "" or an unrecognized value when Vapi's
+        # extractor finds nothing to fill in — treat that as "not provided" rather
+        # than failing validation and dropping the whole call.
+        if v not in _IS_ACTIVE_VALUES:
+            return None
+        return v
+
+    @field_validator("source_detail", "alternate_callback_number", mode="before")
+    @classmethod
+    def _blank_optional_str_to_none(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
 
 class AdminCreateCustomerRequest(BaseModel):
