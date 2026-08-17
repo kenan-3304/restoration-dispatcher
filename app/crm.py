@@ -89,7 +89,7 @@ async def _push_servicetitan(config: dict, call: dict, customer: dict) -> Option
         job_body: dict = {
             "customerId": st_customer_id,
             "summary": _build_summary(call, customer),
-            "priority": "Urgent" if call.get("is_active") else "Medium",
+            "priority": "Urgent" if call.get("is_active") == "yes" else "Medium",
         }
         if config.get("job_type_id"):
             job_body["typeId"] = int(config["job_type_id"])
@@ -206,16 +206,13 @@ async def _push_jobnimbus(config: dict, call: dict, customer: dict) -> Optional[
 def _build_summary(call: dict, customer: dict) -> str:
     parts = []
     if call.get("loss_type"):
-        active = "Active" if call.get("is_active") else "Non-active"
+        is_active = call.get("is_active")
+        active = "Active" if is_active == "yes" else ("Non-active" if is_active == "no" else "Activity unknown")
         parts.append(f"{active} {call['loss_type']} loss")
     if call.get("address_full"):
         parts.append(f"Address: {call['address_full']}")
     if call.get("source_detail"):
         parts.append(f"Source: {call['source_detail']}")
-    if call.get("water_clean_or_dirty") and call["water_clean_or_dirty"] != "not_applicable":
-        parts.append(f"Water: {call['water_clean_or_dirty']}")
-    if call.get("insurance_carrier"):
-        parts.append(f"Insurance: {call['insurance_carrier']}")
     if call.get("call_summary"):
         parts.append(call["call_summary"])
     return " | ".join(parts) or "Restoration dispatch"

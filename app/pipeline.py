@@ -29,9 +29,11 @@ async def process_call(
 ):
     """Main pipeline: insert, validate address, dispatch or confirm."""
     try:
+        callback = resolve_callback_number(data, caller_id)
+
         # 1. Insert row (idempotency check)
         row_id, was_duplicate = await insert_call(
-            vapi_call_id, data, raw_payload, customer_id=customer["id"]
+            vapi_call_id, data, raw_payload, customer_id=customer["id"], callback_number=callback
         )
         if was_duplicate:
             logger.info("Duplicate call %s, skipping pipeline", vapi_call_id)
@@ -42,9 +44,11 @@ async def process_call(
             vapi_call_id, row_id, customer["name"], data.call_outcome,
         )
 
-        # 2. Check call_outcome — only dispatch for emergency_dispatch
-        if data.call_outcome == "non_emergency_callback":
-            logger.info("Call %s is non-emergency callback, no dispatch needed", vapi_call_id)
+        # 2. Only emergency_dispatch triggers dispatch; everything else is logged only
+        if data.call_outcome != "emergency_dispatch":
+            logger.info(
+                "Call %s outcome=%s, no dispatch needed", vapi_call_id, data.call_outcome
+            )
             return
 
         # 3. Validate property address
@@ -54,7 +58,7 @@ async def process_call(
                 address_validation_status="skipped",
                 error="No property address provided",
             )
-            await _dispatch_no_address(vapi_call_id, data, customer, caller_id)
+            await _dispatch_no_address(vapi_call_id, data, customer, callback)
             return
 
         tier, formatted_address, distance = await validate_address(
@@ -74,16 +78,16 @@ async def process_call(
 
         # 5. Act based on tier
         if tier == "in_radius":
-            await _send_dispatch(vapi_call_id, data, customer, distance=distance, borderline=False)
-            await _push_crm(vapi_call_id, data, customer)
+            await _send_dispatch(vapi_call_id, data, customer, callback, distance=distance, borderline=False)
+            await _push_crm(vapi_call_id, data, customer, callback)
         elif tier == "borderline":
-            await _send_dispatch(vapi_call_id, data, customer, distance=distance, borderline=True)
-            await _push_crm(vapi_call_id, data, customer)
+            await _send_dispatch(vapi_call_id, data, customer, callback, distance=distance, borderline=True)
+            await _push_crm(vapi_call_id, data, customer, callback)
         elif tier in ("out_of_radius", "invalid"):
-            await _send_caller_confirmation(vapi_call_id, data, customer, caller_id)
+            await _send_caller_confirmation(vapi_call_id, data, customer, callback)
         elif tier == "skipped":
-            await _send_dispatch(vapi_call_id, data, customer, distance=None, borderline=False)
-            await _push_crm(vapi_call_id, data, customer)
+            await _send_dispatch(vapi_call_id, data, customer, callback, distance=None, borderline=False)
+            await _push_crm(vapi_call_id, data, customer, callback)
 
     except Exception as e:
         logger.exception("Error processing call %s: %s", vapi_call_id, e)
@@ -97,11 +101,12 @@ async def _send_dispatch(
     vapi_call_id: str,
     data: StructuredData,
     customer: dict,
+    callback: Optional[str],
     distance: Optional[float],
     borderline: bool,
 ):
     """Send dispatch SMS to on-call tech."""
-    body = build_dispatch_sms(data, distance=distance, borderline=borderline)
+    body = build_dispatch_sms(data, callback=callback, distance=distance, borderline=borderline)
     to = customer["on_call_phone"]
 
     if not to:
@@ -128,10 +133,9 @@ async def _send_caller_confirmation(
     vapi_call_id: str,
     data: StructuredData,
     customer: dict,
-    caller_id: Optional[str] = None,
+    callback: Optional[str],
 ):
     """Send address confirmation SMS to the caller."""
-    callback = resolve_callback_number(data, caller_id)
     if not callback:
         logger.warning("No callback number for call %s, cannot send confirmation", vapi_call_id)
         await update_call(vapi_call_id, error="No callback number for caller confirmation")
@@ -159,18 +163,18 @@ async def _dispatch_no_address(
     vapi_call_id: str,
     data: StructuredData,
     customer: dict,
-    caller_id: Optional[str] = None,
+    callback: Optional[str],
 ):
     """Dispatch even without an address — tech will need to call back."""
-    await _send_dispatch(vapi_call_id, data, customer, distance=None, borderline=False)
-    await _push_crm(vapi_call_id, data, customer)
+    await _send_dispatch(vapi_call_id, data, customer, callback, distance=None, borderline=False)
+    await _push_crm(vapi_call_id, data, customer, callback)
 
 
-async def _push_crm(vapi_call_id: str, data: StructuredData, customer: dict):
+async def _push_crm(vapi_call_id: str, data: StructuredData, customer: dict, callback: Optional[str]):
     """Push call to CRM if the customer has one configured. Errors are logged, not raised."""
     if not customer.get("crm_type"):
         return
-    call_dict = {"vapi_call_id": vapi_call_id, **data.model_dump()}
+    call_dict = {"vapi_call_id": vapi_call_id, **data.model_dump(), "callback_number": callback}
     crm_job_id = await push_to_crm(
         customer["crm_type"],
         customer.get("crm_config"),
@@ -212,22 +216,16 @@ async def process_address_reply(call: dict, customer: dict, address: str):
 
         if tier in ("in_radius", "borderline"):
             data = StructuredData(
-                caller_name=caller_name,
-                callback_number=callback,
+                call_outcome=call.get("call_outcome") or "emergency_dispatch",
+                loss_type=call.get("loss_type") or "other",
+                caller_name=caller_name or "",
                 address_full=formatted_address or address,
-                address_confirmed=True,
-                loss_type=call.get("loss_type"),
+                call_summary=call.get("call_summary") or "",
                 is_active=call.get("is_active"),
                 source_detail=call.get("source_detail"),
-                call_outcome=call.get("call_outcome", "emergency_dispatch"),
-                call_summary=call.get("call_summary"),
-                water_clean_or_dirty=call.get("water_clean_or_dirty"),
-                access_notes=call.get("access_notes"),
-                insurance_carrier=call.get("insurance_carrier"),
-                life_safety_concern=call.get("life_safety_concern"),
             )
-            await _send_dispatch(vapi_call_id, data, customer, distance=distance, borderline=(tier == "borderline"))
-            await _push_crm(vapi_call_id, data, customer)
+            await _send_dispatch(vapi_call_id, data, customer, callback, distance=distance, borderline=(tier == "borderline"))
+            await _push_crm(vapi_call_id, data, customer, callback)
             if callback:
                 msg = build_address_confirmed_sms(caller_name, customer["name"], formatted_address or address)
                 await send_sms(callback, msg)

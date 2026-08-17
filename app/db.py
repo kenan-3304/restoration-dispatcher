@@ -33,10 +33,11 @@ _SCHEMA_STMTS = [
         received_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         caller_name TEXT,
         callback_number TEXT,
+        alternate_callback_number TEXT,
         address_full TEXT,
         address_confirmed BOOLEAN,
         loss_type TEXT,
-        is_active BOOLEAN,
+        is_active TEXT,
         source_detail TEXT,
         water_clean_or_dirty TEXT,
         access_notes TEXT,
@@ -75,6 +76,8 @@ _MIGRATIONS = [
     "ALTER TABLE calls ADD COLUMN IF NOT EXISTS address_confirmed BOOLEAN",
     "ALTER TABLE calls ADD COLUMN IF NOT EXISTS access_notes TEXT",
     "ALTER TABLE calls ADD COLUMN IF NOT EXISTS callback_reason TEXT",
+    "ALTER TABLE calls ADD COLUMN IF NOT EXISTS alternate_callback_number TEXT",
+    "ALTER TABLE calls ALTER COLUMN is_active TYPE TEXT USING is_active::TEXT",
 ]
 
 
@@ -157,23 +160,20 @@ async def insert_call(
     data: StructuredData,
     raw_payload: str,
     customer_id: Optional[int] = None,
+    callback_number: Optional[str] = None,
 ) -> tuple[Optional[int], bool]:
     try:
         async with _pool.acquire() as conn:
             row_id = await conn.fetchval(
                 """INSERT INTO calls (
                     vapi_call_id, customer_id, caller_name, callback_number,
-                    address_full, address_confirmed, loss_type, is_active,
-                    source_detail, water_clean_or_dirty, access_notes,
-                    call_outcome, call_summary, insurance_carrier,
-                    life_safety_concern, callback_reason, raw_payload
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+                    alternate_callback_number, address_full, loss_type, is_active,
+                    source_detail, call_outcome, call_summary, raw_payload
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                 RETURNING id""",
-                vapi_call_id, customer_id, data.caller_name, data.callback_number,
-                data.address_full, data.address_confirmed, data.loss_type, data.is_active,
-                data.source_detail, data.water_clean_or_dirty, data.access_notes,
-                data.call_outcome, data.call_summary, data.insurance_carrier,
-                data.life_safety_concern, data.callback_reason, raw_payload,
+                vapi_call_id, customer_id, data.caller_name, callback_number,
+                data.alternate_callback_number, data.address_full, data.loss_type, data.is_active,
+                data.source_detail, data.call_outcome, data.call_summary, raw_payload,
             )
             return row_id, False
     except asyncpg.UniqueViolationError:

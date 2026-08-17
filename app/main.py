@@ -109,23 +109,17 @@ async def test_dispatch(req: TestDispatchRequest, background_tasks: BackgroundTa
 
     data = StructuredData(
         call_outcome=req.call_outcome,
-        life_safety_concern=req.life_safety_concern,
-        caller_name=req.caller_name,
-        callback_number=req.callback_number,
-        address_full=req.address_full,
-        address_confirmed=req.address_confirmed,
         loss_type=req.loss_type,
+        caller_name=req.caller_name,
+        address_full=req.address_full,
+        call_summary=req.call_summary,
         is_active=req.is_active,
         source_detail=req.source_detail,
-        water_clean_or_dirty=req.water_clean_or_dirty,
-        access_notes=req.access_notes,
-        insurance_carrier=req.insurance_carrier,
-        callback_reason=req.callback_reason,
-        call_summary=req.call_summary,
+        alternate_callback_number=req.alternate_callback_number,
     )
 
     raw_payload = json.dumps(req.model_dump())
-    background_tasks.add_task(process_call, req.call_id, data, raw_payload, customer)
+    background_tasks.add_task(process_call, req.call_id, data, raw_payload, customer, req.caller_phone)
     logger.info("Test dispatch queued for call_id=%s (customer: %s)", req.call_id, customer["name"])
 
     return {"status": "ok", "call_id": req.call_id, "customer": customer["name"]}

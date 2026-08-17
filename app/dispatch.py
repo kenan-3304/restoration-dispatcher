@@ -17,6 +17,9 @@ LOSS_TYPE_EMOJI = {
 }
 DEFAULT_EMOJI = "\u26a0\ufe0f"  # warning sign
 
+_IS_ACTIVE_URGENCY = {"yes": "ACTIVE EMERGENCY", "no": "NON-ACTIVE"}
+_IS_ACTIVE_LABEL = {"yes": "ACTIVE", "no": "Not active"}
+
 
 def _sanitize_phone(number: Optional[str]) -> Optional[str]:
     """Extract a usable phone number. Prefer extracted callback_number if it has 7+ digits."""
@@ -37,25 +40,24 @@ def _sanitize_phone(number: Optional[str]) -> Optional[str]:
 
 
 def resolve_callback_number(data: StructuredData, caller_id: Optional[str] = None) -> Optional[str]:
-    """Pick the best callback number: prefer extracted callback_number with 7+ digits, fall back to caller_id."""
-    extracted = _sanitize_phone(data.callback_number)
-    if extracted:
-        return extracted
+    """Pick the number to text: alternate_callback_number overrides the live caller ID
+    if the caller explicitly gave a different number to use; otherwise use caller_id."""
+    alternate = _sanitize_phone(data.alternate_callback_number)
+    if alternate:
+        return alternate
     return _sanitize_phone(caller_id)
 
 
-_WATER_TYPE_LABEL = {
-    "clean": "Clean water (Cat 1)",
-    "dirty": "Dirty/gray water (Cat 2+)",
-    "unknown": "Water type unknown",
-}
-
-
-def build_dispatch_sms(data: StructuredData, distance: Optional[float] = None, borderline: bool = False) -> str:
+def build_dispatch_sms(
+    data: StructuredData,
+    callback: Optional[str] = None,
+    distance: Optional[float] = None,
+    borderline: bool = False,
+) -> str:
     """Build the dispatch SMS body for the on-call tech."""
     emoji = LOSS_TYPE_EMOJI.get((data.loss_type or "").lower(), DEFAULT_EMOJI)
     loss_upper = (data.loss_type or "UNKNOWN").upper()
-    urgency = "ACTIVE EMERGENCY" if data.is_active else "NON-ACTIVE"
+    urgency = _IS_ACTIVE_URGENCY.get(data.is_active, "ACTIVITY UNKNOWN")
 
     lines = []
 
@@ -68,30 +70,14 @@ def build_dispatch_sms(data: StructuredData, distance: Optional[float] = None, b
     address_line = data.address_full or "NO ADDRESS"
     if distance is not None and not borderline:
         address_line += f" ({distance:.0f} mi)"
-    if data.address_confirmed is True:
-        address_line += " \u2713"
-    elif data.address_confirmed is False:
-        address_line += " (not confirmed)"
     lines.append(address_line)
 
-    active_str = "ACTIVE" if data.is_active else "Not active"
+    active_str = _IS_ACTIVE_LABEL.get(data.is_active, "Activity unknown")
     source_str = data.source_detail or "unknown source"
     lines.append(f"{active_str} \u2014 {source_str}")
 
-    water_label = _WATER_TYPE_LABEL.get(data.water_clean_or_dirty or "")
-    if water_label:
-        lines.append(water_label)
-
-    if data.life_safety_concern:
-        lines.append("\u26a0\ufe0f LIFE SAFETY CONCERN")
-
-    lines.append(f"Insurance: {data.insurance_carrier or 'None provided'}")
-
-    if data.access_notes:
-        lines.append(f"Access: {data.access_notes}")
-
-    callback = _sanitize_phone(data.callback_number) or "no number"
-    lines.append(f"Caller: {data.caller_name or 'Unknown'}, {callback}")
+    callback_str = _sanitize_phone(callback) or "no number"
+    lines.append(f"Caller: {data.caller_name or 'Unknown'}, {callback_str}")
     lines.append("---")
     lines.append(data.call_summary or "No summary available")
 
