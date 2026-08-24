@@ -436,6 +436,8 @@ This tests the full production flow: real phone call → Vapi extracts structure
 
 **Simulating the Vapi webhook locally** (without making a real call):
 
+Assistants are configured with `artifactPlan.structuredOutputIds` (Vapi's "Structured Outputs" feature), so the webhook reads extracted fields from `artifact.structuredOutputs`, not `analysis.structuredData` — `analysis` is `{}` for these assistants. Each entry is keyed by the structured output's id and wraps the fields in `result`:
+
 ```bash
 curl -X POST http://localhost:8000/webhook/vapi \
   -H "Content-Type: application/json" \
@@ -444,21 +446,25 @@ curl -X POST http://localhost:8000/webhook/vapi \
       "type": "end-of-call-report",
       "call": {
         "id": "vapi-test-001",
-        "assistantId": "ace1775b-6b7a-44cd-a3e1-6612601e0e33"
+        "assistantId": "ace1775b-6b7a-44cd-a3e1-6612601e0e33",
+        "customer": { "number": "+17037750484" }
       },
-      "analysis": {
-        "structuredData": {
-          "call_outcome": "emergency_dispatch",
-          "life_safety_concern": false,
-          "caller_name": "Sarah Chen",
-          "callback_number": "+17037750484",
-          "address_full": "44110 Ashburn Shopping Plaza, Ashburn, VA 20147",
-          "address_confirmed": true,
-          "loss_type": "water",
-          "is_active": true,
-          "source_detail": "dishwasher drain line",
-          "water_clean_or_dirty": "clean",
-          "call_summary": "Active water leak from dishwasher. Homeowner is home."
+      "analysis": {},
+      "artifact": {
+        "structuredOutputs": {
+          "6d8e8c96-7014-470e-976b-159949c8d01d": {
+            "name": "restoration",
+            "result": {
+              "call_outcome": "emergency_dispatch",
+              "caller_name": "Sarah Chen",
+              "callback_number": "",
+              "address_full": "44110 Ashburn Shopping Plaza, Ashburn, VA 20147",
+              "loss_type": "water",
+              "is_active": "yes",
+              "source_detail": "dishwasher drain line",
+              "call_summary": "Active water leak from dishwasher. Homeowner is home."
+            }
+          }
         }
       }
     }
@@ -466,6 +472,8 @@ curl -X POST http://localhost:8000/webhook/vapi \
 ```
 
 An unknown `assistantId` returns `{"status":"ignored"}` — that's how you know the routing is wrong.
+
+`callback_number` in the structured output result maps to `alternate_callback_number` on `StructuredData` — it's only used to override the live caller ID (from `call.customer.number`) when the caller explicitly gives a different number to call back on.
 
 ---
 
@@ -477,7 +485,7 @@ Follow these steps every time you sign up a new restoration company. Target time
 
 1. In the Vapi dashboard, duplicate your existing assistant or create a new one.
 2. In the system prompt, replace the company name with the client's name (e.g. "You are the after-hours dispatch assistant for **Acme Restoration**...").
-3. In **Analysis → Structured Data Schema**, paste the schema below. This tells Vapi exactly what to extract from every call.
+3. Create a **Structured Output** (not the legacy "Analysis → Structured Data Schema") named `restoration` using the schema below, and attach its id under the assistant's **artifactPlan.structuredOutputIds**. This is what the webhook actually reads — `analysis.structuredData` is left empty by this setup and is not used.
 4. Under **Server URL**, set the webhook to:
    ```
    https://your-render-url.onrender.com/webhook/vapi
@@ -485,28 +493,24 @@ Follow these steps every time you sign up a new restoration company. Target time
 5. Save and copy the **Assistant ID** — you'll need it in Step 3.
 
 <details>
-<summary>Structured data schema (click to expand)</summary>
+<summary>Structured output schema (click to expand)</summary>
+
+Field names and enums must match `StructuredData` in `app/models.py` exactly — the webhook validates against that model, and unrecognized fields (like a `callback_number` result field) get remapped/dropped rather than erroring.
 
 ```json
 {
   "type": "object",
   "properties": {
-    "call_outcome": { "type": "string", "enum": ["emergency_dispatch", "non_emergency_callback"] },
-    "life_safety_concern": { "type": "boolean" },
-    "caller_name": { "type": "string" },
-    "callback_number": { "type": "string" },
-    "address_full": { "type": "string" },
-    "address_confirmed": { "type": "boolean" },
+    "call_outcome": { "type": "string", "enum": ["emergency_dispatch", "non_emergency", "life_safety_redirect", "no_response", "spam"] },
     "loss_type": { "type": "string", "enum": ["water", "fire", "smoke", "mold", "other"] },
-    "is_active": { "type": "boolean" },
+    "caller_name": { "type": "string" },
+    "address_full": { "type": "string" },
+    "call_summary": { "type": "string" },
+    "is_active": { "type": "string", "enum": ["yes", "no", "unknown"] },
     "source_detail": { "type": "string" },
-    "water_clean_or_dirty": { "type": "string", "enum": ["clean", "dirty", "unknown", "not_applicable"] },
-    "access_notes": { "type": "string" },
-    "insurance_carrier": { "type": "string" },
-    "callback_reason": { "type": "string" },
-    "call_summary": { "type": "string" }
+    "callback_number": { "type": "string" }
   },
-  "required": ["call_outcome", "life_safety_concern", "caller_name", "callback_number", "address_full", "loss_type", "call_summary"]
+  "required": ["call_outcome", "loss_type", "caller_name", "address_full", "call_summary"]
 }
 ```
 </details>

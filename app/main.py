@@ -100,6 +100,12 @@ async def webhook_vapi(request: Request, background_tasks: BackgroundTasks):
             "(likely a dead-air/no-answer call); treating as no_response",
             call_id,
         )
+    elif "callback_number" in structured and "alternate_callback_number" not in structured:
+        # The assistant's structured output schema field is "callback_number",
+        # but StructuredData's field is "alternate_callback_number" — without
+        # this remap, a callback number the caller explicitly gave would be
+        # silently dropped instead of overriding the live caller ID.
+        structured = {**structured, "alternate_callback_number": structured["callback_number"]}
 
     try:
         data = StructuredData.model_validate(structured)
