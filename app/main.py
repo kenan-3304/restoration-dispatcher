@@ -79,27 +79,18 @@ async def webhook_vapi(request: Request, background_tasks: BackgroundTasks):
         logger.warning("Unknown assistantId %s for call %s", assistant_id, call_id)
         return {"status": "ignored", "reason": f"unknown assistant '{assistant_id}'"}
 
-    analysis = message.get("analysis", {})
-    structured = analysis.get("structuredData", {})
+    # This assistant is configured with artifactPlan.structuredOutputIds (Vapi's
+    # "Structured Outputs" feature), not analysisPlan.structuredDataSchema — so
+    # the extracted fields land at artifact.structuredOutputs, keyed by output
+    # id, not at analysis.structuredData (which is {} for this assistant).
+    # {"<id>": {"name": "restoration", "result": {...fields...}}}
+    outputs = message.get("artifact", {}).get("structuredOutputs") or {}
+    structured = message.get("analysis", {}).get("structuredData") or {}
 
-    if not structured:
-        # The unwrap below only fires when analysis.structuredData is non-empty.
-        # If it's empty here, either Vapi genuinely extracted nothing, or the
-        # data is living somewhere else in the payload than we think — dump the
-        # full message body once so we can see the actual shape and stop guessing.
-        logger.warning("Raw webhook body for call %s (structuredData empty): %s", call_id, json.dumps(body))
-
-    # Vapi's newer "Structured Outputs" feature nests each configured output's
-    # fields under a generated id instead of putting them flat on structuredData:
-    # {"<id>": {"name": "restoration", "result": {...fields...}}}. Unwrap it so
-    # the rest of the pipeline sees flat fields regardless of which Vapi feature
-    # produced them.
-    if structured and all(
-        isinstance(v, dict) and "result" in v for v in structured.values()
-    ):
+    if outputs:
         entry = next(
-            (v for v in structured.values() if v.get("name") == "restoration"),
-            next(iter(structured.values())),
+            (v for v in outputs.values() if v.get("name") == "restoration"),
+            next(iter(outputs.values())),
         )
         structured = entry.get("result") or {}
 
