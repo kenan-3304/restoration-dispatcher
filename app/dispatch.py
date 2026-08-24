@@ -1,6 +1,7 @@
 import logging
 import re
 from typing import Optional
+from urllib.parse import quote_plus
 
 from twilio.rest import Client as TwilioClient
 
@@ -53,6 +54,7 @@ def build_dispatch_sms(
     callback: Optional[str] = None,
     distance: Optional[float] = None,
     borderline: bool = False,
+    formatted_address: Optional[str] = None,
 ) -> str:
     """Build the dispatch SMS body for the on-call tech."""
     emoji = LOSS_TYPE_EMOJI.get((data.loss_type or "").lower(), DEFAULT_EMOJI)
@@ -67,10 +69,13 @@ def build_dispatch_sms(
 
     lines.append(f"\U0001f6a8 {emoji} {loss_upper} \u2014 {urgency}")
 
-    address_line = data.address_full or "NO ADDRESS"
+    address = formatted_address or data.address_full
+    address_line = address or "NO ADDRESS"
     if distance is not None and not borderline:
         address_line += f" ({distance:.0f} mi)"
     lines.append(address_line)
+    if address:
+        lines.append(f"https://www.google.com/maps/search/?api=1&query={quote_plus(address)}")
 
     active_str = _IS_ACTIVE_LABEL.get(data.is_active, "Activity unknown")
     source_str = data.source_detail or "unknown source"

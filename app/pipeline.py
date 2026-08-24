@@ -78,10 +78,10 @@ async def process_call(
 
         # 5. Act based on tier
         if tier == "in_radius":
-            await _send_dispatch(vapi_call_id, data, customer, callback, distance=distance, borderline=False)
+            await _send_dispatch(vapi_call_id, data, customer, callback, distance=distance, borderline=False, formatted_address=formatted_address)
             await _push_crm(vapi_call_id, data, customer, callback)
         elif tier == "borderline":
-            await _send_dispatch(vapi_call_id, data, customer, callback, distance=distance, borderline=True)
+            await _send_dispatch(vapi_call_id, data, customer, callback, distance=distance, borderline=True, formatted_address=formatted_address)
             await _push_crm(vapi_call_id, data, customer, callback)
         elif tier in ("out_of_radius", "invalid"):
             await _send_caller_confirmation(vapi_call_id, data, customer, callback)
@@ -104,9 +104,10 @@ async def _send_dispatch(
     callback: Optional[str],
     distance: Optional[float],
     borderline: bool,
+    formatted_address: Optional[str] = None,
 ):
     """Send dispatch SMS to on-call tech."""
-    body = build_dispatch_sms(data, callback=callback, distance=distance, borderline=borderline)
+    body = build_dispatch_sms(data, callback=callback, distance=distance, borderline=borderline, formatted_address=formatted_address)
     to = customer["on_call_phone"]
 
     if not to:
