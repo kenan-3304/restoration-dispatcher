@@ -1,7 +1,14 @@
+import re
+
 from pydantic import BaseModel, field_validator
 from typing import Optional, Literal
 
 _IS_ACTIVE_VALUES = {"yes", "no", "unknown"}
+
+# Vapi's STT sometimes reads multi-digit numbers back as space-separated single
+# digits (e.g. "4 4 2 2 3 Suscon Square" instead of "44223 Suscon Square"),
+# which breaks geocoding. Collapse runs of 2+ isolated single digits.
+_DIGIT_RUN_RE = re.compile(r"\b\d(?: \d)+\b")
 
 
 class StructuredData(BaseModel):
@@ -36,6 +43,13 @@ class StructuredData(BaseModel):
         if isinstance(v, str) and not v.strip():
             return None
         return v
+
+    @field_validator("address_full", mode="before")
+    @classmethod
+    def _normalize_address(cls, v):
+        if not isinstance(v, str):
+            return v
+        return _DIGIT_RUN_RE.sub(lambda m: m.group(0).replace(" ", ""), v)
 
 
 class AdminCreateCustomerRequest(BaseModel):
