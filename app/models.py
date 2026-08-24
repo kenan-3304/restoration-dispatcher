@@ -5,13 +5,17 @@ _IS_ACTIVE_VALUES = {"yes", "no", "unknown"}
 
 
 class StructuredData(BaseModel):
+    # No defaults here would mean a call where Vapi's extractor comes back empty
+    # (e.g. dead-air / immediate-hangup calls with no transcript to extract from)
+    # 400s the webhook and the call is silently dropped instead of logged as
+    # no_response. Defaults mirror TestDispatchRequest below.
     call_outcome: Literal[
         "emergency_dispatch", "non_emergency", "life_safety_redirect", "no_response", "spam"
-    ]
-    loss_type: Literal["water", "fire", "smoke", "mold", "other"]
-    caller_name: str
-    address_full: str
-    call_summary: str
+    ] = "no_response"
+    loss_type: Literal["water", "fire", "smoke", "mold", "other"] = "other"
+    caller_name: str = ""
+    address_full: str = ""
+    call_summary: str = ""
     is_active: Optional[Literal["yes", "no", "unknown"]] = None
     source_detail: Optional[str] = None
     alternate_callback_number: Optional[str] = None

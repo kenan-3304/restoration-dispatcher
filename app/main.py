@@ -82,6 +82,27 @@ async def webhook_vapi(request: Request, background_tasks: BackgroundTasks):
     analysis = message.get("analysis", {})
     structured = analysis.get("structuredData", {})
 
+    # Vapi's newer "Structured Outputs" feature nests each configured output's
+    # fields under a generated id instead of putting them flat on structuredData:
+    # {"<id>": {"name": "restoration", "result": {...fields...}}}. Unwrap it so
+    # the rest of the pipeline sees flat fields regardless of which Vapi feature
+    # produced them.
+    if structured and all(
+        isinstance(v, dict) and "result" in v for v in structured.values()
+    ):
+        entry = next(
+            (v for v in structured.values() if v.get("name") == "restoration"),
+            next(iter(structured.values())),
+        )
+        structured = entry.get("result") or {}
+
+    if not structured:
+        logger.warning(
+            "Empty structuredData for call %s — Vapi's extractor found nothing "
+            "(likely a dead-air/no-answer call); treating as no_response",
+            call_id,
+        )
+
     try:
         data = StructuredData.model_validate(structured)
     except Exception as e:
