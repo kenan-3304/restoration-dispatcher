@@ -82,6 +82,13 @@ async def webhook_vapi(request: Request, background_tasks: BackgroundTasks):
     analysis = message.get("analysis", {})
     structured = analysis.get("structuredData", {})
 
+    if not structured:
+        # The unwrap below only fires when analysis.structuredData is non-empty.
+        # If it's empty here, either Vapi genuinely extracted nothing, or the
+        # data is living somewhere else in the payload than we think — dump the
+        # full message body once so we can see the actual shape and stop guessing.
+        logger.warning("Raw webhook body for call %s (structuredData empty): %s", call_id, json.dumps(body))
+
     # Vapi's newer "Structured Outputs" feature nests each configured output's
     # fields under a generated id instead of putting them flat on structuredData:
     # {"<id>": {"name": "restoration", "result": {...fields...}}}. Unwrap it so
